@@ -1,0 +1,12 @@
+# Environment secrets (never commit to git)
+.env
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# OS / Editor
+.DS_Store
+.vscode/
