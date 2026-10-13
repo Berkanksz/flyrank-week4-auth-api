@@ -1,6 +1,7 @@
 import os
-from fastapi import FastAPI, HTTPException, status, Header
-from pydantic import BaseModel, EmailStr
+from fastapi import FastAPI, HTTPException, status, Depends, Request
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from pydantic import BaseModel
 from dotenv import load_dotenv
 
 from supabase_client import supabase
@@ -9,14 +10,49 @@ load_dotenv()
 
 app = FastAPI(
     title="FlyRank Auth API",
-    description="Authentication and protected routes using Supabase Auth and Bearer JWT",
+    description="Authentication and protected routes using Supabase Auth and Bearer JWT tokens",
     version="1.0.0"
 )
+
+# HTTPBearer security scheme: adds Swagger UI Authorize padlock for bearer tokens
+security = HTTPBearer(auto_error=False)
 
 
 class AuthRequest(BaseModel):
     email: str | None = None
     password: str | None = None
+
+
+def get_current_user(credentials: HTTPAuthorizationCredentials | None = Depends(security)) -> dict:
+    """Reusable auth guard: extracts Bearer token, verifies it via Supabase, and returns user dict."""
+    if not credentials or not credentials.credentials:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail={"error": "Access token required"}
+        )
+    
+    token = credentials.credentials
+    try:
+        user_response = supabase.auth.get_user(token)
+        if not user_response or not user_response.user:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail={"error": "Invalid or expired token"}
+            )
+        user = user_response.user
+        return {
+            "id": user.id,
+            "email": user.email,
+            "created_at": str(user.created_at) if user.created_at else None,
+            "token": token
+        }
+    except HTTPException:
+        raise
+    except Exception:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail={"error": "Invalid or expired token"}
+        )
 
 
 @app.get("/")
@@ -82,35 +118,40 @@ def log_in(body: AuthRequest):
         raise HTTPException(status_code=401, detail={"error": "Invalid login credentials"})
 
 
+@app.post("/auth/logout", status_code=status.HTTP_204_NO_CONTENT)
+def log_out(current_user: dict = Depends(get_current_user)):
+    """End the user's session with Supabase. Protected route requiring Bearer token."""
+    try:
+        supabase.auth.sign_out()
+    except Exception:
+        pass
+    return None
+
+
 @app.get("/public/info", status_code=status.HTTP_200_OK)
 def get_public_info():
     """Public lobby endpoint open to anyone with no authentication."""
     return {"message": "Welcome stranger! This info is public."}
 
 
-@app.get("/protected/profile")
-def get_profile(authorization: str | None = Header(default=None)):
-    """Stage 3: verify the bearer token with Supabase auth."""
-    if not authorization or not authorization.startswith("Bearer "):
-        raise HTTPException(status_code=401, detail={"error": "Access token required"})
-    token = authorization.split(" ", 1)[1].strip()
-    if not token:
-        raise HTTPException(status_code=401, detail={"error": "Access token required"})
+@app.get("/protected/profile", status_code=status.HTTP_200_OK)
+def get_profile(current_user: dict = Depends(get_current_user)):
+    """Protected endpoint: returns private profile data of the verified user."""
+    return {
+        "id": current_user["id"],
+        "email": current_user["email"],
+        "created_at": current_user["created_at"]
+    }
 
-    try:
-        user_response = supabase.auth.get_user(token)
-        if not user_response or not user_response.user:
-            raise HTTPException(status_code=401, detail={"error": "Invalid or expired token"})
-        user = user_response.user
-        return {
-            "id": user.id,
-            "email": user.email,
-            "created_at": str(user.created_at) if user.created_at else None
-        }
-    except HTTPException:
-        raise
-    except Exception:
-        raise HTTPException(status_code=401, detail={"error": "Invalid or expired token"})
+
+@app.get("/protected/dashboard", status_code=status.HTTP_200_OK)
+def get_dashboard(current_user: dict = Depends(get_current_user)):
+    """Second protected endpoint: verifies guard reusability across routes."""
+    return {
+        "message": f"Welcome to your private dashboard, {current_user['email']}!",
+        "user_id": current_user["id"],
+        "features": ["SEO Audits", "Rank Tracking", "API Keys"]
+    }
 
 
 if __name__ == "__main__":
