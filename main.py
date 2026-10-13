@@ -1,5 +1,5 @@
 import os
-from fastapi import FastAPI, HTTPException, status
+from fastapi import FastAPI, HTTPException, status, Header
 from pydantic import BaseModel, EmailStr
 from dotenv import load_dotenv
 
@@ -80,6 +80,23 @@ def log_in(body: AuthRequest):
         raise
     except Exception:
         raise HTTPException(status_code=401, detail={"error": "Invalid login credentials"})
+
+
+@app.get("/public/info", status_code=status.HTTP_200_OK)
+def get_public_info():
+    """Public lobby endpoint open to anyone with no authentication."""
+    return {"message": "Welcome stranger! This info is public."}
+
+
+@app.get("/protected/profile")
+def get_profile(authorization: str | None = Header(default=None)):
+    """Stage 2: checks if an access token was provided in Authorization header."""
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail={"error": "Access token required"})
+    token = authorization.split(" ", 1)[1].strip()
+    if not token:
+        raise HTTPException(status_code=401, detail={"error": "Access token required"})
+    return {"message": "Access token received", "token_preview": token[:10] + "..."}
 
 
 if __name__ == "__main__":
